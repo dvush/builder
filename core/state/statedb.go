@@ -108,6 +108,8 @@ type StateDB struct {
 	validRevisions []revision
 	nextRevisionId int
 
+	multiTxSnapshot *multiTxSnapshot
+
 	// Measurements gathered during execution for debugging purposes
 	AccountReads         time.Duration
 	AccountHashes        time.Duration
@@ -600,8 +602,8 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 // CreateAccount is called during the EVM CREATE operation. The situation might arise that
 // a contract does the following:
 //
-//   1. sends funds to sha(account ++ (nonce + 1))
-//   2. tx_create(sha(account ++ nonce)) (note that this gets the address of 1)
+//  1. sends funds to sha(account ++ (nonce + 1))
+//  2. tx_create(sha(account ++ nonce)) (note that this gets the address of 1)
 //
 // Carrying over the balance ensures that Ether doesn't disappear.
 func (s *StateDB) CreateAccount(addr common.Address) {
@@ -784,6 +786,9 @@ func (s *StateDB) GetRefund() uint64 {
 // the journal as well as the refunds. Finalise, however, will not push any updates
 // into the tries just yet. Only IntermediateRoot or Commit will do that.
 func (s *StateDB) Finalise(deleteEmptyObjects bool) {
+	if multiSnap := s.multiTxSnapshot; multiSnap != nil {
+		multiSnap.updateFromJournal(s.journal)
+	}
 	addressesToPrefetch := make([][]byte, 0, len(s.journal.dirties))
 	for addr := range s.journal.dirties {
 		obj, exist := s.stateObjects[addr]
@@ -811,6 +816,11 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 		} else {
 			obj.finalise(true) // Prefetch slots in the background
 		}
+		if multiSnap := s.multiTxSnapshot; multiSnap != nil {
+			_, wasPending := s.stateObjectsPending[addr]
+			_, wasDirty := s.stateObjectsDirty[addr]
+			multiSnap.updatePendingStatus(addr, wasPending, wasDirty)
+		}
 		s.stateObjectsPending[addr] = struct{}{}
 		s.stateObjectsDirty[addr] = struct{}{}
 
@@ -832,6 +842,10 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Finalise all the dirty storage states and write them into the tries
 	s.Finalise(deleteEmptyObjects)
+
+	if s.multiTxSnapshot != nil {
+		s.multiTxSnapshot.invalid = true
+	}
 
 	// If there was a trie prefetcher operating, it gets aborted and irrevocably
 	// modified after we start retrieving tries. Remove it from the statedb after
@@ -1065,4 +1079,25 @@ func (s *StateDB) AddressInAccessList(addr common.Address) bool {
 // SlotInAccessList returns true if the given (address, slot)-tuple is in the access list.
 func (s *StateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
 	return s.accessList.Contains(addr, slot)
+}
+
+// MultiTxSnapshot creates new checkpoint for multi txs reverts
+func (s *StateDB) MultiTxSnapshot() error {
+	if s.multiTxSnapshot != nil {
+		return errors.New("multi tx snapshot already exists")
+	}
+	s.multiTxSnapshot = newMultiTxSnapshot()
+	return nil
+}
+
+func (s *StateDB) MultiTxSnapshotRevert() error {
+	if s.multiTxSnapshot == nil {
+		return errors.New("multi tx snapshot does not exist")
+	}
+	if s.multiTxSnapshot.invalid {
+		return errors.New("multi tx snapshot is invalid")
+	}
+	s.multiTxSnapshot.revertState(s)
+	s.multiTxSnapshot = nil
+	return nil
 }
