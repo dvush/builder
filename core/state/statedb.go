@@ -802,8 +802,11 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			continue
 		}
 		if obj.suicided || (deleteEmptyObjects && obj.empty()) {
-			obj.deleted = true
+			if multiSnap := s.multiTxSnapshot; multiSnap != nil {
+				multiSnap.updateObjectDeleted(obj.address, obj.deleted)
+			}
 
+			obj.deleted = true
 			// If state snapshotting is active, also mark the destruction there.
 			// Note, we can't do this only at the end of a block because multiple
 			// transactions within the same block might self destruct and then
