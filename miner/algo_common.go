@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -84,29 +83,32 @@ func checkInterrupt(i *int32) bool {
 
 // Simulate bundle on top of current state without modifying it
 // pending txs used to track if bundle tx is part of the mempool
-func applyTransactionWithBlacklist(signer types.Signer, config *params.ChainConfig, bc core.ChainContext, author *common.Address, gp *core.GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, cfg vm.Config, blacklist map[common.Address]struct{}) (*types.Receipt, *state.StateDB, error) {
+func applyTransactionWithBlacklist(signer types.Signer, author *common.Address, gp *core.GasPool, statedb *state.StateDB,
+	header *types.Header, tx *types.Transaction, usedGas *uint64, chData *chainData, hook core.PreFinalizeHook) (*types.Receipt, error) {
+
+	cfg := chData.chain.GetVMConfig()
 	// short circuit if blacklist is empty
-	if len(blacklist) == 0 {
+	if len(chData.blacklist) == 0 {
 		snap := statedb.Snapshot()
-		receipt, err := core.ApplyTransaction(config, bc, author, gp, statedb, header, tx, usedGas, cfg, nil)
+		receipt, err := core.ApplyTransaction(chData.chainConfig, chData.chain, author, gp, statedb, header, tx, usedGas, *cfg, hook)
 		if err != nil {
 			statedb.RevertToSnapshot(snap)
 		}
-		return receipt, statedb, err
+		return receipt, err
 	}
 
 	sender, err := types.Sender(signer, tx)
 	if err != nil {
-		return nil, statedb, err
+		return nil, err
 	}
 
-	if _, in := blacklist[sender]; in {
-		return nil, statedb, errors.New("blacklist violation, tx.sender")
+	if _, in := chData.blacklist[sender]; in {
+		return nil, errors.New("blacklist violation, tx.sender")
 	}
 
 	if to := tx.To(); to != nil {
-		if _, in := blacklist[*to]; in {
-			return nil, statedb, errors.New("blacklist violation, tx.to")
+		if _, in := chData.blacklist[*to]; in {
+			return nil, errors.New("blacklist violation, tx.to")
 		}
 	}
 
@@ -114,11 +116,14 @@ func applyTransactionWithBlacklist(signer types.Signer, config *params.ChainConf
 	cfg.Tracer = touchTracer
 	cfg.Debug = true
 
-	hook := func() error {
+	hookWithBlacklist := func() error {
 		for _, address := range touchTracer.TouchedAddresses() {
-			if _, in := blacklist[address]; in {
+			if _, in := chData.blacklist[address]; in {
 				return errors.New("blacklist violation, tx trace")
 			}
+		}
+		if hook != nil {
+			return hook()
 		}
 		return nil
 	}
@@ -127,15 +132,15 @@ func applyTransactionWithBlacklist(signer types.Signer, config *params.ChainConf
 	gasPoolTmp := new(core.GasPool).AddGas(gp.Gas())
 	snap := statedb.Snapshot()
 
-	receipt, err := core.ApplyTransaction(config, bc, author, gasPoolTmp, statedb, header, tx, &usedGasTmp, cfg, hook)
+	receipt, err := core.ApplyTransaction(chData.chainConfig, chData.chain, author, gasPoolTmp, statedb, header, tx, &usedGasTmp, *cfg, hookWithBlacklist)
 	if err != nil {
 		statedb.RevertToSnapshot(snap)
-		return receipt, statedb, err
+		return receipt, err
 	}
 
 	*usedGas = usedGasTmp
 	*gp = *gasPoolTmp
-	return receipt, statedb, err
+	return receipt, err
 }
 
 // commit tx to envDiff
@@ -151,9 +156,7 @@ func (envDiff *environmentDiff) commitTx(tx *types.Transaction, chData chainData
 
 	envDiff.state.Prepare(tx.Hash(), envDiff.baseEnvironment.tcount+len(envDiff.newTxs))
 
-	receipt, newState, err := applyTransactionWithBlacklist(signer, chData.chainConfig, chData.chain, coinbase,
-		envDiff.gasPool, envDiff.state, header, tx, &header.GasUsed, *chData.chain.GetVMConfig(), chData.blacklist)
-	envDiff.state = newState
+	receipt, err := applyTransactionWithBlacklist(signer, coinbase, envDiff.gasPool, envDiff.state, header, tx, &header.GasUsed, &chData, nil)
 	if err != nil {
 		switch {
 		case errors.Is(err, core.ErrGasLimitReached):
