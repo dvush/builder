@@ -5,7 +5,6 @@ import (
 	"math/big"
 )
 
-// TODO: test
 // TODO: snapdestructs, snapaccount storage
 
 type multiTxSnapshot struct {
@@ -24,18 +23,23 @@ type multiTxSnapshot struct {
 	accountSuicided map[common.Address]bool
 	accountDeleted  map[common.Address]bool
 
-	accountsNotPending map[common.Address]struct{}
-	accountsNotDirty   map[common.Address]struct{}
+	accountNotPending map[common.Address]struct{}
+	accountNotDirty   map[common.Address]struct{}
 }
 
 func newMultiTxSnapshot() *multiTxSnapshot {
 	return &multiTxSnapshot{
-		numLogsAdded:    make(map[common.Hash]int),
-		accountStorage:  make(map[common.Address]map[common.Hash]*common.Hash),
-		accountBalance:  make(map[common.Address]*big.Int),
-		accountNonce:    make(map[common.Address]uint64),
-		accountCode:     make(map[common.Address][]byte),
-		accountCodeHash: make(map[common.Address][]byte),
+		numLogsAdded:      make(map[common.Hash]int),
+		prevObjects:       make(map[common.Address]*stateObject),
+		accountStorage:    make(map[common.Address]map[common.Hash]*common.Hash),
+		accountBalance:    make(map[common.Address]*big.Int),
+		accountNonce:      make(map[common.Address]uint64),
+		accountCode:       make(map[common.Address][]byte),
+		accountCodeHash:   make(map[common.Address][]byte),
+		accountSuicided:   make(map[common.Address]bool),
+		accountDeleted:    make(map[common.Address]bool),
+		accountNotPending: make(map[common.Address]struct{}),
+		accountNotDirty:   make(map[common.Address]struct{}),
 	}
 }
 
@@ -43,19 +47,19 @@ func newMultiTxSnapshot() *multiTxSnapshot {
 func (s *multiTxSnapshot) updateFromJournal(journal *journal) {
 	for _, entry := range journal.entries {
 		switch entry := entry.(type) {
-		case *balanceChange:
+		case balanceChange:
 			s.updateBalanceChange(entry)
-		case *nonceChange:
+		case nonceChange:
 			s.updateNonceChange(entry)
-		case *codeChange:
+		case codeChange:
 			s.updateCodeChange(entry)
-		case *addLogChange:
+		case addLogChange:
 			s.numLogsAdded[entry.txhash]++
-		case *createObjectChange:
+		case createObjectChange:
 			s.updateCreateObjectChange(entry)
-		case *resetObjectChange:
+		case resetObjectChange:
 			s.updateResetObjectChange(entry)
-		case *suicideChange:
+		case suicideChange:
 			s.updateSuicideChange(entry)
 		}
 	}
@@ -68,7 +72,7 @@ func (s *multiTxSnapshot) objectChanged(address common.Address) bool {
 }
 
 // updateBalanceChange updates the snapshot with the balance change.
-func (s *multiTxSnapshot) updateBalanceChange(change *balanceChange) {
+func (s *multiTxSnapshot) updateBalanceChange(change balanceChange) {
 	if s.objectChanged(*change.account) {
 		return
 	}
@@ -78,7 +82,7 @@ func (s *multiTxSnapshot) updateBalanceChange(change *balanceChange) {
 }
 
 // updateNonceChange updates the snapshot with the nonce change.
-func (s *multiTxSnapshot) updateNonceChange(change *nonceChange) {
+func (s *multiTxSnapshot) updateNonceChange(change nonceChange) {
 	if s.objectChanged(*change.account) {
 		return
 	}
@@ -88,7 +92,7 @@ func (s *multiTxSnapshot) updateNonceChange(change *nonceChange) {
 }
 
 // updateCodeChange updates the snapshot with the code change.
-func (s *multiTxSnapshot) updateCodeChange(change *codeChange) {
+func (s *multiTxSnapshot) updateCodeChange(change codeChange) {
 	if s.objectChanged(*change.account) {
 		return
 	}
@@ -99,7 +103,7 @@ func (s *multiTxSnapshot) updateCodeChange(change *codeChange) {
 }
 
 // updateResetObjectChange updates the snapshot with the reset object change.
-func (s *multiTxSnapshot) updateResetObjectChange(change *resetObjectChange) {
+func (s *multiTxSnapshot) updateResetObjectChange(change resetObjectChange) {
 	address := change.prev.address
 	if _, ok := s.prevObjects[address]; !ok {
 		s.prevObjects[address] = change.prev
@@ -107,14 +111,14 @@ func (s *multiTxSnapshot) updateResetObjectChange(change *resetObjectChange) {
 }
 
 // updateCreateObjectChange updates the snapshot with the create object change.
-func (s *multiTxSnapshot) updateCreateObjectChange(change *createObjectChange) {
+func (s *multiTxSnapshot) updateCreateObjectChange(change createObjectChange) {
 	if _, ok := s.prevObjects[*change.account]; !ok {
 		s.prevObjects[*change.account] = nil
 	}
 }
 
 // updateSuicideChange updates the snapshot with the suicide change.
-func (s *multiTxSnapshot) updateSuicideChange(change *suicideChange) {
+func (s *multiTxSnapshot) updateSuicideChange(change suicideChange) {
 	if s.objectChanged(*change.account) {
 		return
 	}
@@ -147,10 +151,10 @@ func (s *multiTxSnapshot) updatePendingStorage(address common.Address, key, valu
 // updatePendingStatus updates the snapshot with previous pending status.
 func (s *multiTxSnapshot) updatePendingStatus(address common.Address, pending, dirty bool) {
 	if !pending {
-		s.accountsNotPending[address] = struct{}{}
+		s.accountNotPending[address] = struct{}{}
 	}
 	if !dirty {
-		s.accountsNotDirty[address] = struct{}{}
+		s.accountNotDirty[address] = struct{}{}
 	}
 }
 
@@ -190,9 +194,9 @@ func (s *multiTxSnapshot) revertState(st *StateDB) {
 	for address, storage := range s.accountStorage {
 		for key, value := range storage {
 			if value == nil {
-				delete(st.stateObjects[address].dirtyStorage, key)
+				delete(st.stateObjects[address].pendingStorage, key)
 			} else {
-				st.stateObjects[address].dirtyStorage[key] = *value
+				st.stateObjects[address].pendingStorage[key] = *value
 			}
 		}
 	}
@@ -219,10 +223,10 @@ func (s *multiTxSnapshot) revertState(st *StateDB) {
 	}
 
 	// restore pending status
-	for address := range s.accountsNotPending {
+	for address := range s.accountNotPending {
 		delete(st.stateObjectsPending, address)
 	}
-	for address := range s.accountsNotDirty {
+	for address := range s.accountNotDirty {
 		delete(st.stateObjectsDirty, address)
 	}
 }
