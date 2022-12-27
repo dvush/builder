@@ -116,14 +116,14 @@ func applyTransactionWithBlacklist(signer types.Signer, author *common.Address, 
 	cfg.Tracer = touchTracer
 	cfg.Debug = true
 
-	hookWithBlacklist := func() error {
+	hookWithBlacklist := func(res *core.ExecutionResult, db *state.StateDB) error {
 		for _, address := range touchTracer.TouchedAddresses() {
 			if _, in := chData.blacklist[address]; in {
 				return errors.New("blacklist violation, tx trace")
 			}
 		}
 		if hook != nil {
-			return hook()
+			return hook(res, db)
 		}
 		return nil
 	}

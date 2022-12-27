@@ -933,13 +933,13 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	}
 
 	var tracer *logger.AccountTouchTracer
-	var hook func() error
+	var hook func(*core.ExecutionResult, *state.StateDB) error
 	config := *w.chain.GetVMConfig()
 	if len(w.blockList) != 0 {
 		tracer = logger.NewAccountTouchTracer()
 		config.Tracer = tracer
 		config.Debug = true
-		hook = func() error {
+		hook = func(*core.ExecutionResult, *state.StateDB) error {
 			for _, address := range tracer.TouchedAddresses() {
 				if _, in := w.blockList[address]; in {
 					return errBlocklistViolation

@@ -30,7 +30,9 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-type PreFinalizeHook func() error
+// PreFinalizeHook is called before the state is finalized. It can be used to
+// revert the state before transaction is finalized when returned error is not nil.
+type PreFinalizeHook func(*ExecutionResult, *state.StateDB) error
 
 // StateProcessor is a basic Processor, which takes care of transitioning
 // state from one point to another.
@@ -94,7 +96,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	return receipts, allLogs, *usedGas, nil
 }
 
-func applyTransaction(msg types.Message, config *params.ChainConfig, author *common.Address, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM, preFinalizeHook func() error) (*types.Receipt, error) {
+func applyTransaction(msg types.Message, config *params.ChainConfig, author *common.Address, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM, preFinalizeHook PreFinalizeHook) (*types.Receipt, error) {
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(msg)
 	evm.Reset(txContext, statedb)
@@ -106,7 +108,7 @@ func applyTransaction(msg types.Message, config *params.ChainConfig, author *com
 		return nil, err
 	}
 	if preFinalizeHook != nil {
-		err = preFinalizeHook()
+		err = preFinalizeHook(result, statedb)
 		if err != nil {
 			statedb.RevertToSnapshot(snapshot)
 			return nil, err
@@ -196,6 +198,8 @@ func applyTransactionWithResult(msg types.Message, config *params.ChainConfig, b
 // and uses the input parameters for its environment. It returns the receipt
 // for the transaction, gas used and an error if the transaction failed,
 // indicating the block was invalid.
+// `preFinalizeHook` is called before the state is finalized. It can be used to
+// revert the state before transaction is finalized.
 func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, cfg vm.Config, preFinalizeHook PreFinalizeHook) (*types.Receipt, error) {
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number), header.BaseFee)
 	if err != nil {
