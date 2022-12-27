@@ -394,3 +394,95 @@ func (envDiff *environmentDiff) commitPayoutTx(amount *big.Int, sender, receiver
 
 	return receipt, nil
 }
+
+func insertPayoutTxNoCopy(env *environment, sender, receiver common.Address, gas uint64, isEOA bool, availableFunds *big.Int, prv *ecdsa.PrivateKey, chData chainData) (*types.Receipt, error) {
+	applyTx := func(env *environment, gas uint64) (*types.Receipt, error) {
+		fee := new(big.Int).Mul(env.header.BaseFee, new(big.Int).SetUint64(gas))
+		amount := new(big.Int).Sub(availableFunds, fee)
+		if amount.Sign() < 0 {
+			return nil, errors.New("not enough funds available")
+		}
+		rec, err := commitPayoutTxNoCopy(env, amount, sender, receiver, gas, prv, chData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to commit payment tx: %w", err)
+		}
+		return rec, nil
+	}
+
+	if isEOA {
+		rec, err := applyTx(env, gas)
+		if err != nil {
+			return nil, err
+		}
+		return rec, nil
+	}
+
+	var (
+		err error
+		rec *types.Receipt
+	)
+	for i := 0; i < 6; i++ {
+		rec, err = applyTx(env, gas)
+		if err != nil {
+			gas += 1000
+			continue
+		}
+		return rec, nil
+	}
+
+	if err == nil {
+		return nil, errors.New("could not estimate gas")
+	}
+
+	return nil, err
+}
+
+func commitPayoutTxNoCopy(env *environment, amount *big.Int, sender, receiver common.Address, gas uint64, prv *ecdsa.PrivateKey, chData chainData) (*types.Receipt, error) {
+	senderBalance := env.state.GetBalance(sender)
+
+	if gas < params.TxGas {
+		return nil, errors.New("not enough gas for intrinsic gas cost")
+	}
+
+	requiredBalance := new(big.Int).Mul(env.header.BaseFee, new(big.Int).SetUint64(gas))
+	requiredBalance = requiredBalance.Add(requiredBalance, amount)
+	if requiredBalance.Cmp(senderBalance) > 0 {
+		return nil, errors.New("not enough balance")
+	}
+
+	signer := env.signer
+	tx, err := types.SignNewTx(prv, signer, &types.DynamicFeeTx{
+		ChainID:   chData.chainConfig.ChainID,
+		Nonce:     env.state.GetNonce(sender),
+		GasTipCap: new(big.Int),
+		GasFeeCap: env.header.BaseFee,
+		Gas:       gas,
+		To:        &receiver,
+		Value:     amount,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	txSender, err := types.Sender(signer, tx)
+	if err != nil {
+		return nil, err
+	}
+	if txSender != sender {
+		return nil, errors.New("incorrect sender private key")
+	}
+
+	hook := func(result *core.ExecutionResult, db *state.StateDB) error {
+		if result.Failed() {
+			return errors.New("payment tx failed")
+		}
+		return nil
+	}
+
+	receipt, err := applyTransactionWithBlacklist(signer, &env.coinbase, env.gasPool, env.state, env.header, tx, &env.header.GasUsed, &chData, hook)
+	if err != nil {
+		return receipt, err
+	}
+
+	return receipt, nil
+}
