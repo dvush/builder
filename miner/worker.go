@@ -1386,7 +1386,9 @@ func (w *worker) fillTransactions(interrupt *int32, env *environment) (error, []
 func (w *worker) fillTransactionsAlgoWorker(interrupt *int32, env *environment) (error, []types.SimulatedBundle, []types.SimulatedBundle) {
 	// Split the pending transactions into locals and remotes
 	// Fill the block with all available pending transactions.
-	pending := w.eth.TxPool().Pending(true)
+	// TODO: uncomment after test
+	//pending := w.eth.TxPool().Pending(true)
+	var pending map[common.Address]types.Transactions
 	bundlesToConsider, err := w.getSimulatedBundles(env)
 	if err != nil {
 		return err, nil, nil
@@ -1406,7 +1408,11 @@ func (w *worker) fillTransactionsAlgoWorker(interrupt *int32, env *environment) 
 func (w *worker) fillTransactionsAlgoWorkerSnapshot(interrupt *int32, env *environment) (error, []types.SimulatedBundle, []types.SimulatedBundle) {
 	// Split the pending transactions into locals and remotes
 	// Fill the block with all available pending transactions.
-	pending := w.eth.TxPool().Pending(true)
+
+	// TODO: uncomment after test
+	//pending := w.eth.TxPool().Pending(true)
+	var pending map[common.Address]types.Transactions
+
 	bundlesToConsider, err := w.getSimulatedBundles(env)
 	if err != nil {
 		return err, nil, nil
@@ -1424,6 +1430,21 @@ func (w *worker) getSimulatedBundles(env *environment) ([]types.SimulatedBundle,
 	}
 
 	bundles, ccBundlesCh := w.eth.TxPool().MevBundles(env.header.Number, env.header.Time)
+
+	// TODO: remove this test
+	pending := w.eth.TxPool().Pending(true)
+	// convert txs to bundles
+	var pendingBundles []types.MevBundle
+	for _, txs := range pending {
+		for _, tx := range txs {
+			bundle := types.MevBundle{
+				Txs:  types.Transactions{tx},
+				Hash: tx.Hash(),
+			}
+			pendingBundles = append(pendingBundles, bundle)
+		}
+	}
+	bundles = append(bundles, pendingBundles...)
 
 	// TODO: consider interrupt
 	simBundles, err := w.simulateBundles(env, bundles, nil) /* do not consider gas impact of mempool txs as bundles are treated as transactions wrt ordering */
