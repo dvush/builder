@@ -1104,3 +1104,11 @@ func (s *StateDB) MultiTxSnapshotRevert() error {
 	s.multiTxSnapshot = nil
 	return nil
 }
+
+func (s *StateDB) MultiTxSnapshotDiscard() error {
+	if s.multiTxSnapshot == nil {
+		return errors.New("multi tx snapshot does not exist")
+	}
+	s.multiTxSnapshot = nil
+	return nil
+}
