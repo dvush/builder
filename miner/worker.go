@@ -1312,6 +1312,8 @@ func (w *worker) fillTransactionsSelectAlgo(interrupt *int32, env *environment) 
 		err, blockBundles, allBundles = w.fillTransactionsAlgoWorker(interrupt, env)
 	case ALGO_MEV_GETH:
 		err, blockBundles, allBundles = w.fillTransactions(interrupt, env)
+	case ALGO_GREEDY_SNAPSHOT:
+		err, blockBundles, allBundles = w.fillTransactionsAlgoWorkerSnapshot(interrupt, env)
 	default:
 		err, blockBundles, allBundles = w.fillTransactions(interrupt, env)
 	}
@@ -1397,6 +1399,21 @@ func (w *worker) fillTransactionsAlgoWorker(interrupt *int32, env *environment) 
 		mergeAlgoTimer.Update(time.Since(start))
 	}
 	*env = *newEnv
+
+	return nil, blockBundles, bundlesToConsider
+}
+
+func (w *worker) fillTransactionsAlgoWorkerSnapshot(interrupt *int32, env *environment) (error, []types.SimulatedBundle, []types.SimulatedBundle) {
+	// Split the pending transactions into locals and remotes
+	// Fill the block with all available pending transactions.
+	pending := w.eth.TxPool().Pending(true)
+	bundlesToConsider, err := w.getSimulatedBundles(env)
+	if err != nil {
+		return err, nil, nil
+	}
+
+	builder := newGreedyBuilderSnapshot(w.chain, w.chainConfig, w.blockList, env, interrupt)
+	_, blockBundles := builder.buildBlock(bundlesToConsider, pending)
 
 	return nil, blockBundles, bundlesToConsider
 }

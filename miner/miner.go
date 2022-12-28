@@ -52,6 +52,7 @@ type AlgoType int
 const (
 	ALGO_MEV_GETH AlgoType = iota
 	ALGO_GREEDY
+	ALGO_GREEDY_SNAPSHOT
 )
 
 func AlgoTypeFlagToEnum(algoString string) (AlgoType, error) {
@@ -60,6 +61,8 @@ func AlgoTypeFlagToEnum(algoString string) (AlgoType, error) {
 		return ALGO_MEV_GETH, nil
 	case "greedy":
 		return ALGO_GREEDY, nil
+	case "greedy-snapshot":
+		return ALGO_GREEDY_SNAPSHOT, nil
 	default:
 		return ALGO_MEV_GETH, errors.New("algo not recognized")
 	}
