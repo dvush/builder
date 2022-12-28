@@ -43,6 +43,7 @@ func (c *txApplyChanges) apply() error {
 	*c.env.gasPool = *c.gasPool
 	c.env.header.GasUsed = c.usedGas
 	c.env.profit.Set(c.profit)
+	c.env.tcount += len(c.txs)
 	c.env.txs = append(c.env.txs, c.txs...)
 	c.env.receipts = append(c.env.receipts, c.receipts...)
 	return nil
