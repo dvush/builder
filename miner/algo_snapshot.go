@@ -28,6 +28,7 @@ func newEnvChanges(env *environment) (*txApplyChanges, error) {
 	return &txApplyChanges{
 		env:      env,
 		gasPool:  new(core.GasPool).AddGas(env.gasPool.Gas()),
+		usedGas:  env.header.GasUsed,
 		profit:   new(big.Int).Set(env.profit),
 		txs:      make([]*types.Transaction, 0),
 		receipts: make([]*types.Receipt, 0),
