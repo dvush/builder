@@ -80,6 +80,7 @@ func (c *txApplyChanges) commitTx(tx *types.Transaction, chData chainData) (*typ
 	cfg.Tracer = touchTracer
 	cfg.Debug = true
 
+	c.env.state.Prepare(tx.Hash(), c.env.tcount+len(c.txs))
 	rec, err := core.ApplyTransaction(chData.chainConfig, chData.chain, &c.env.coinbase, c.gasPool, c.env.state, c.env.header, tx, &c.usedGas, cfg, nil)
 	if err != nil {
 		switch {
